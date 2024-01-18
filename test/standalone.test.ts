@@ -1,3 +1,4 @@
+import sha512half from '@transia/xrpl/dist/npm/src/utils/hashes/sha512Half';
 import {
   SetHookFlags,
   Wallet,
@@ -15,6 +16,8 @@ import {
   iHook,
   clearHookStateV3,
   clearAllHooksV3,
+  floatToXfl,
+  flipBeLe,
 } from '@transia/hooks-toolkit'
 
 // NOT EXPORTED
@@ -29,12 +32,16 @@ describe('govern.c', () => {
   let testContext: XrplIntegrationTestContext
   let seatMember: Wallet[] = []
   let hookWallet: Wallet
+  let hookHash: string
 
   beforeAll(async () => {
     testContext = await setupClient(serverUrl)
     const { alice, bob, carol, dave, elsa } = testContext
     seatMember = [alice, bob, carol, dave, elsa]
     hookWallet = testContext.hook1
+  })
+
+  beforeEach(async () => {
     const acct1hook1 = createHookPayload({
       version: 0,
       createFile: 'govern',
@@ -62,6 +69,7 @@ describe('govern.c', () => {
         ),
       ]
     })
+    hookHash = sha512half(acct1hook1.CreateCode!)
     await setHooksV3({
       client: testContext.client,
       seed: hookWallet.seed,
@@ -71,14 +79,14 @@ describe('govern.c', () => {
     await Xrpld.submit(testContext.client, {
       tx: {
         TransactionType: 'Invoke',
-        Account: alice.address,
+        Account: testContext.alice.address,
         Destination: hookWallet.address,
       },
-      wallet: alice,
+      wallet: testContext.alice,
     })
   })
 
-  afterAll(async () => {
+  afterEach(async () => {
     const clearHook = {
       Flags: SetHookFlags.hsfNSDelete,
       HookNamespace: '0000000000000000000000000000000000000000000000000000000000000000',
@@ -86,68 +94,83 @@ describe('govern.c', () => {
     await clearHookStateV3({
       client: testContext.client,
       seed: testContext.hook1.seed,
-      hooks: [{ Hook: clearHook }, { Hook: clearHook }],
+      hooks: [{ Hook: clearHook }],
     } as SetHookParams)
 
     await clearAllHooksV3({
       client: testContext.client,
       seed: testContext.hook1.seed,
     } as SetHookParams)
+  })
+
+  afterAll(() => {
     teardownClient(testContext)
   })
 
-  test('Remove Alice', async () => {
-    // Vote from alice (seat 0)
+  const createAliceVote = async (data: { layer: '01' | '02', topic: string, vote: string }) => {
+    const HookParameters =  [
+      new iHookParamEntry(
+        new iHookParamName('L'),
+        new iHookParamValue(data.layer, true)
+      ).toXrpl(),
+      new iHookParamEntry(
+        new iHookParamName('T'),
+        new iHookParamValue(data.topic, true)
+      ).toXrpl(),
+      new iHookParamEntry(
+        new iHookParamName('V'),
+        new iHookParamValue(
+          data.vote,
+          true
+        )
+      ).toXrpl(),
+    ]
     await Xrpld.submit(testContext.client, {
       tx: {
         TransactionType: 'Invoke',
         Account: seatMember[0].address,
         Destination: hookWallet.address,
-        HookParameters: [
-          new iHookParamEntry(
-            new iHookParamName('L'),
-            new iHookParamValue('01', true)
-          ).toXrpl(),
-          new iHookParamEntry(
-            new iHookParamName('T'),
-            new iHookParamValue(convertStringToHex('S') + '01', true)
-          ).toXrpl(),
-          new iHookParamEntry(
-            new iHookParamName('V'),
-            new iHookParamValue(
-              decodeAccountID(seatMember[0].address).toString('hex').toUpperCase(),
-              true
-            )
-          ).toXrpl(),
-        ],
+        HookParameters,
       },
       wallet: seatMember[0],
     })
+  }
 
-    await Xrpld.submit(testContext.client, {
-      tx: {
-        TransactionType: 'Invoke',
-        Account: seatMember[0].address,
-        Destination: hookWallet.address,
-        HookParameters: [
-          new iHookParamEntry(
-            new iHookParamName('L'),
-            new iHookParamValue('02', true)
-          ).toXrpl(),
-          new iHookParamEntry(
-            new iHookParamName('T'),
-            new iHookParamValue(convertStringToHex('S') + '02', true)
-          ).toXrpl(),
-          new iHookParamEntry(
-            new iHookParamName('V'),
-            new iHookParamValue(
-              decodeAccountID(seatMember[0].address).toString('hex').toUpperCase(),
-              true
-            )
-          ).toXrpl(),
-        ],
-      },
-      wallet: seatMember[0],
+  test('Remove Alice', async () => {
+    // Vote from alice (seat 0)
+    // seat
+    await createAliceVote({
+      layer: '01',
+      topic: convertStringToHex('S') + '01',
+      vote: decodeAccountID(seatMember[0].address).toString('hex').toUpperCase()
+    })
+    await createAliceVote({
+      layer: '02',
+      topic: convertStringToHex('S') + '01',
+      vote: decodeAccountID(seatMember[0].address).toString('hex').toUpperCase()
+    })
+    // hookhash
+    await createAliceVote({
+      layer: '01',
+      topic: convertStringToHex('H') + '01',
+      vote: hookHash.toUpperCase()
+    })
+    await createAliceVote({
+      layer: '02',
+      topic: convertStringToHex('H') + '01',
+      vote: hookHash.toUpperCase()
+    })
+    // reward rate (Only L1)
+    await createAliceVote({
+      layer: '01',
+      topic: convertStringToHex('RR'),
+      vote: flipBeLe(floatToXfl(0.003) as bigint)
+    })
+    // reward delay (Only L1)
+    await createAliceVote({
+      layer: '01',
+      topic: convertStringToHex('RD'),
+      vote: flipBeLe(floatToXfl(30000) as bigint)
     })
 
     // remove alice from seat 1
@@ -188,7 +211,7 @@ describe('govern.c', () => {
     const namespace_entries = (response.result as any).namespace_entries
 
     const aliceAccountId = decodeAccountID(seatMember[0].address).toString('hex').toUpperCase()
-    
+
     // shoud be empty
     const aliceVotes = namespace_entries.filter((e: any) =>
       e.HookStateKey.includes(aliceAccountId) || e.HookStateData.includes(aliceAccountId)
