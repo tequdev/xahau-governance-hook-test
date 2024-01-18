@@ -649,9 +649,15 @@ int64_t hook(uint32_t r)
                             i - 12;
                         previous_member[3] = tbl;
 
-                        uint8_t vote_key[32];
-                        // if (state(SBUF(vote_key), SBUF(previous_member)) > 0)
-                        if (state(vote_key + 12, 20, SBUF(previous_member)) == 20)
+                        uint8_t vote_key[32] = {};
+                        uint8_t ts = 
+                            previous_member[1] == 'H' ? 32 :      // hook topics are a 32 byte hook hash
+                            previous_member[1] == 'S' ? 20 :      // account topics are a 20 byte account ID
+                            8;                        // reward topics are an 8 byte le xfl
+                        
+                        uint8_t padding = 32 - ts;
+
+                        if (state(vote_key + padding, ts, SBUF(previous_member)) == ts)
                         {
                             uint8_t vote_count = 0;
 
@@ -660,10 +666,6 @@ int64_t hook(uint32_t r)
                             vote_key[1] = previous_member[1];
                             vote_key[2] = previous_member[2];
                             vote_key[3] = tbl;
-
-                            trace(SBUF("previous_member==:"), previous_member, 32, 1);
-                            trace(SBUF("vote_key==:"), vote_key, 32, 1);
-
                             if (state(&vote_count, 1, SBUF(vote_key)) == 1)
                             {
                                 // if we're down to 1 vote then delete state
