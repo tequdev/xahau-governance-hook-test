@@ -18,6 +18,7 @@ import {
   clearAllHooksV3,
   floatToXfl,
   flipBeLe,
+  ExecutionUtility,
 } from '@transia/hooks-toolkit'
 
 // NOT EXPORTED
@@ -28,7 +29,27 @@ import {
   teardownClient,
 } from '@transia/hooks-toolkit/dist/npm/src/libs/xrpl-helpers'
 
-describe('govern.c', () => {
+const generateHashParam = (layer: '01' | '02', topic: string, value: string) => {
+  return [
+    new iHookParamEntry(
+      new iHookParamName('L'),
+      new iHookParamValue(layer, true)
+    ).toXrpl(),
+    new iHookParamEntry(
+      new iHookParamName('T'),
+      new iHookParamValue(topic, true)
+    ).toXrpl(),
+    new iHookParamEntry(
+      new iHookParamName('V'),
+      new iHookParamValue(
+        value,
+        true
+      )
+    ).toXrpl(),
+  ]
+}
+
+describe('governance', () => {
   let testContext: XrplIntegrationTestContext
   let seatMember: Wallet[] = []
   let hookWallet: Wallet
@@ -107,67 +128,52 @@ describe('govern.c', () => {
     teardownClient(testContext)
   })
 
-  const createAliceVote = async (data: { layer: '01' | '02', topic: string, vote: string }) => {
-    const HookParameters =  [
-      new iHookParamEntry(
-        new iHookParamName('L'),
-        new iHookParamValue(data.layer, true)
-      ).toXrpl(),
-      new iHookParamEntry(
-        new iHookParamName('T'),
-        new iHookParamValue(data.topic, true)
-      ).toXrpl(),
-      new iHookParamEntry(
-        new iHookParamName('V'),
-        new iHookParamValue(
-          data.vote,
-          true
-        )
-      ).toXrpl(),
-    ]
+  const createVote = async (wallet: Wallet, data: { layer: '01' | '02', topic: string, vote: string }) => {
+    const HookParameters = generateHashParam(data.layer, data.topic, data.vote)
     await Xrpld.submit(testContext.client, {
       tx: {
         TransactionType: 'Invoke',
-        Account: seatMember[0].address,
+        Account: wallet.address,
         Destination: hookWallet.address,
         HookParameters,
       },
-      wallet: seatMember[0],
+      wallet: wallet,
     })
   }
 
   test('Remove Alice', async () => {
     // Vote from alice (seat 0)
     // seat
-    await createAliceVote({
+    const alice = seatMember[0]
+    await createVote(alice, {
       layer: '01',
       topic: convertStringToHex('S') + '01',
       vote: decodeAccountID(seatMember[0].address).toString('hex').toUpperCase()
     })
-    await createAliceVote({
+    await createVote(alice, {
       layer: '02',
       topic: convertStringToHex('S') + '01',
       vote: decodeAccountID(seatMember[0].address).toString('hex').toUpperCase()
     })
     // hookhash
-    await createAliceVote({
+    await createVote(alice, {
       layer: '01',
       topic: convertStringToHex('H') + '01',
       vote: hookHash.toUpperCase()
     })
-    await createAliceVote({
+    await createVote(alice, {
       layer: '02',
       topic: convertStringToHex('H') + '01',
       vote: hookHash.toUpperCase()
     })
     // reward rate (Only L1)
-    await createAliceVote({
+    await createVote(alice, {
       layer: '01',
       topic: convertStringToHex('RR'),
       vote: flipBeLe(floatToXfl(0.003) as bigint)
     })
     // reward delay (Only L1)
-    await createAliceVote({
+    await createVote(alice, {
       layer: '01',
       topic: convertStringToHex('RD'),
       vote: flipBeLe(floatToXfl(30000) as bigint)
@@ -217,5 +223,142 @@ describe('govern.c', () => {
       e.HookStateKey.includes(aliceAccountId) || e.HookStateData.includes(aliceAccountId)
     )
     expect(aliceVotes).toHaveLength(0)
+  })
+
+  describe('Rescue', () => {
+
+    beforeEach(async () => {
+      const rescuehook = createHookPayload({
+        version: 0,
+        createFile: 'govern-rescue',
+        namespace: '0000000000000000000000000000000000000000000000000000000000000000',
+        flags: SetHookFlags.hsfOverride,
+        hookOnArray: ['Payment'],
+      })
+
+      await setHooksV3({
+        client: testContext.client,
+        seed: hookWallet.seed,
+        hooks: [{ Hook: {} }, { Hook: rescuehook }],
+      } as SetHookParams)
+    })
+
+    const createVote = async (wallet: Wallet, data: { layer: '01' | '02', topic: string, value: string }) => {
+      const HookParameters = generateHashParam(data.layer, data.topic, data.value)
+      return await Xrpld.submit(testContext.client, {
+        tx: {
+          TransactionType: 'Payment',
+          Account: wallet.address,
+          Destination: hookWallet.address,
+          Amount: '1',
+          HookParameters,
+        },
+        wallet: wallet,
+      })
+    }
+
+    test('Amount exceeding 1 drop', async () => {
+      const acc = seatMember[0]
+      const HookParameters = generateHashParam("02", convertStringToHex('S') + '01', decodeAccountID(acc.address).toString('hex').toUpperCase())
+      const result = await Xrpld.submit(testContext.client, {
+        tx: {
+          TransactionType: 'Payment',
+          Account: acc.address,
+          Destination: hookWallet.address,
+          Amount: '2',
+          HookParameters,
+        },
+        wallet: acc,
+      })
+      const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+      expect(executions).toHaveLength(1)
+      expect(executions[0].HookReturnString).toEqual('Only 1 drop allowed. Passing.')
+    })
+
+    test('Invalid votes for others than Hook.', async () => {
+      {
+        const result = await createVote(seatMember[0], {
+          layer: "01",
+          topic: convertStringToHex('S') + '01',
+          value: decodeAccountID(seatMember[0].address).toString('hex').toUpperCase()
+        })
+        const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+        expect(executions).toHaveLength(1)
+        expect(executions[0].HookReturnString).toEqual('Governance: Seat topics are not allowed.')
+      }
+      {
+        const result = await createVote(seatMember[0], {
+          layer: "02",
+          topic: convertStringToHex('S') + '01',
+          value: decodeAccountID(seatMember[0].address).toString('hex').toUpperCase()
+        })
+        const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+        expect(executions).toHaveLength(1)
+        expect(executions[0].HookReturnString).toEqual('Governance: Seat topics are not allowed.')
+      }
+      // {
+      //   const result = await createVote(seatMember[0], {
+      //     layer: "01",
+      //     topic: convertStringToHex('H') + '01',
+      //     value: hookHash.toUpperCase()
+      //   })
+      //   const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+      //   expect(executions).toHaveLength(1)
+      //   expect(executions[0].HookReturnString).toEqual('Only 1 drop allowed. Passing.')
+      // }
+      // {
+      //   const result = await createVote(seatMember[0], {
+      //     layer: "02",
+      //     topic: convertStringToHex('H') + '01',
+      //     value: hookHash.toUpperCase()
+      //   })
+      //   const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+      //   expect(executions).toHaveLength(1)
+      //   expect(executions[0].HookReturnString).toEqual('Only 1 drop allowed. Passing.')
+      // }
+      {
+        const result = await createVote(seatMember[0], {
+          layer: "01",
+          topic: convertStringToHex('RR'),
+          value: flipBeLe(floatToXfl(0.003) as bigint)
+        })
+        const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+        expect(executions).toHaveLength(1)
+        expect(executions[0].HookReturnString).toEqual('Governance: Reward topics are not allowed')
+      }
+      {
+        const result = await createVote(seatMember[0], {
+          layer: "01",
+          topic: convertStringToHex('RD'),
+          value: flipBeLe(floatToXfl(30000) as bigint)
+        })
+        const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+        expect(executions).toHaveLength(1)
+        expect(executions[0].HookReturnString).toEqual('Governance: Reward topics are not allowed')
+      }
+    })
+    
+    test('Valid votes for Hook.', async () => {
+      {
+        const result = await createVote(seatMember[0], {
+          layer: "01",
+          topic: convertStringToHex('H') + '01',
+          value: hookHash.toUpperCase()
+        })
+        const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+        expect(executions).toHaveLength(1)
+        expect(executions[0].HookReturnString).toEqual('Governance: Not yet enough votes to action L1 vote...')
+      }
+      {
+        const result = await createVote(seatMember[0], {
+          layer: "02",
+          topic: convertStringToHex('H') + '01',
+          value: hookHash.toUpperCase()
+        })
+        const { executions } = await ExecutionUtility.getHookExecutionsFromTx(testContext.client, result.hash)
+        expect(executions).toHaveLength(1)
+        expect(executions[0].HookReturnString).toEqual('Governance: Vote record. Not yet enough votes to action.')
+      }
+    })
   })
 })
