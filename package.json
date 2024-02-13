@@ -9,7 +9,8 @@
     "build": "c2wasm-cli contracts/govern.c build/",
     "test": "jest",
     "stop": "xrpld-cli down:clean",
-    "hookhash": "yarn run build && ts-node test/hookhash.ts"
+    "deploy": "yarn build && ts-node src/deploy-testnet.ts",
+    "hookhash": "yarn build && ts-node src/hookhash.ts"
   },
   "dependencies": {
     "@transia/hooks-toolkit": "^1.0.8",

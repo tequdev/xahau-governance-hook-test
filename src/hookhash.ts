@@ -5,7 +5,7 @@ import {
 
 
 export async function main(): Promise<void> {
-  const hook = createHookPayload(0, 'govern')
+  const hook = createHookPayload({ version: 0, createFile: 'govern' })
 
   if (hook.CreateCode) {
     console.log("HookHash", sha512half(hook.CreateCode))
