@@ -44,7 +44,7 @@ describe('govern.c', () => {
   beforeEach(async () => {
     const acct1hook1 = createHookPayload({
       version: 0,
-      createFile: 'govern',
+      createFile: 'govern-old',
       namespace: '0000000000000000000000000000000000000000000000000000000000000000',
       flags: SetHookFlags.hsfOverride,
       hookOnArray: ['Invoke'],
@@ -73,9 +73,9 @@ describe('govern.c', () => {
     await setHooksV3({
       client: testContext.client,
       seed: hookWallet.seed,
-      hooks: [{ Hook: acct1hook1 }],
+      hooks: [{ Hook: { ...acct1hook1, HookNamespace: '0000000000000000000000000000000000000000000000000000000000000000' } }],
     } as SetHookParams)
-
+    
     await Xrpld.submit(testContext.client, {
       tx: {
         TransactionType: 'Invoke',
@@ -84,6 +84,28 @@ describe('govern.c', () => {
       },
       wallet: testContext.alice,
     })
+    
+    const acct1hook2 = createHookPayload({
+      version: 0,
+      createFile: 'govern',
+      namespace: '0000000000000000000000000000000000000000000000000000000000000000',
+      flags: SetHookFlags.hsfOverride,
+      hookOnArray: ['Invoke'],
+    })
+    hookHash = sha512half(acct1hook2.CreateCode!)
+    await setHooksV3({
+      client: testContext.client,
+      seed: hookWallet.seed,
+      hooks: [{ Hook: { ...acct1hook2, HookNamespace: '0000000000000000000000000000000000000000000000000000000000000000' } }],
+    } as SetHookParams)
+    
+    const response = await testContext.client.request({
+      command: 'account_tx',
+      account: hookWallet.address,
+      limit: 1
+    })
+    
+    console.log(JSON.stringify(response.result.transactions[0].meta, null, 2))
   })
 
   afterEach(async () => {
@@ -205,7 +227,7 @@ describe('govern.c', () => {
       command: 'account_namespace',
       account: hookWallet.address,
       namespace_id:
-        '60E05BD1B195AF2F94112FA7197A5C88289058840CE7C6DF9693756BC6250F55',
+        '0000000000000000000000000000000000000000000000000000000000000000',
     })
 
     const namespace_entries = (response.result as any).namespace_entries

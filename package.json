@@ -6,7 +6,7 @@
     "email": "git@tequ.dev"
   },
   "scripts": {
-    "build": "c2wasm-cli contracts/govern.c build/",
+    "build": "c2wasm-cli contracts/govern.c build/ && c2wasm-cli contracts/govern-old.c build/",
     "test": "jest",
     "stop": "xrpld-cli down:clean",
     "deploy": "yarn build && ts-node src/deploy-testnet.ts",
